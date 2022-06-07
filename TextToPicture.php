@@ -17,6 +17,9 @@ class TextToPicture
     // ぼかし(モザイク)のピクセルサイズ
     const PIXELATE_SIZE = 6;
 
+    const INIT_CANVAS_SIZE = 512;
+    const OMISSION_CHAR = "…";
+
     private string $text;
     private bool $isHideContent;
     private Font $font;
@@ -114,12 +117,10 @@ class TextToPicture
      */
     public function getPicture(): ?GdImage
     {
-        // 仮の画像サイズ
-        $tmpHeight = 512;
         // 実際の画像サイズ
         $actualHeight = 0;
 
-        $textCanvas = imagecreatetruecolor($this->calcTextAreaWidth(), $tmpHeight);
+        $textCanvas = imagecreatetruecolor($this->calcTextAreaWidth(), isset($this->height) ? ($this->height - ($this->paddingTop + $this->paddingBottom)) : self::INIT_CANVAS_SIZE);
         $fontColor = imagecolorallocate($textCanvas, $this->font->getColorRed(), $this->font->getColorGreen(), $this->font->getColorBlue());
         // 透過画像にテキストを描画する
         $backgroundColor = imagecolorallocatealpha($textCanvas, 0, 0, 0, 127);
@@ -127,57 +128,103 @@ class TextToPicture
         imagesavealpha($textCanvas, true);
         imagefill($textCanvas, 0, 0, $backgroundColor);
 
+        $writeLineLog = [];
+
         // 最初の行の高さ
         $firstLineHeight = 0;
 
-        // 1行ずつ処理していく
-        foreach (explode("\n", trim($this->text)) as $line) {
-            if (trim($line) === "") {
-                // 空文字は1行分送る
-                $actualHeight += ($this->font->getSize() * 1.5);
-                $textCanvas = $this->write($textCanvas, [], $actualHeight);
-            }
-
-            $writeWidth = 0;
-            $writeData = [];
-            $maxCharHeight = 0;
-            foreach (preg_split("//u", trim($line), -1, PREG_SPLIT_NO_EMPTY) as $char) {
-                // 絵文字かチェックする /[\xF0-\xF7][\x80-\xBF][\x80-\xBF][\x80-\xBF]/
-                $isEmoji = (preg_match("/[\xF0-\xF7][\x80-\xBF][\x80-\xBF][\x80-\xBF]/", $char) !== 0);
-                if ($isEmoji) {
-                    // GDで絵文字を処理出来なさそうなので飛ばす
-                    continue;
+        try {
+            // 1行ずつ処理していく
+            foreach (explode("\n", trim($this->text)) as $line) {
+                if (trim($line) === "") {
+                    // 空文字は1行分送る
+                    $actualHeight += ($this->font->getSize() * 1.5);
+                    $writeLineLog[] = [];
+                    $textCanvas = $this->write($textCanvas, [], $actualHeight);
                 }
-                // 描画範囲を求める
-                $box = imagettfbbox($this->font->getSize(), 0, $this->font->getPath(), $char);
-                // 長さを取得する
-                $charWidth = abs($box[2] - $box[0]);
-                // 高さを取得する
-                $charHeight = abs($box[7] - $box[1]);
-                $maxCharHeight = max($maxCharHeight, $charHeight);
-                // 幅を超えるかチェックする
-                if ($writeWidth + $charWidth > imagesx($textCanvas)) {
+
+                $writeWidth = 0;
+                $writeData = [];
+                $maxCharHeight = 0;
+                foreach (preg_split("//u", trim($line), -1, PREG_SPLIT_NO_EMPTY) as $char) {
+                    // 絵文字かチェックする /[\xF0-\xF7][\x80-\xBF][\x80-\xBF][\x80-\xBF]/
+                    $isEmoji = (preg_match("/[\xF0-\xF7][\x80-\xBF][\x80-\xBF][\x80-\xBF]/", $char) !== 0);
+                    if ($isEmoji) {
+                        // GDで絵文字を処理出来なさそうなので飛ばす
+                        continue;
+                    }
+                    // 描画範囲を求める
+                    $box = imagettfbbox($this->font->getSize(), 0, $this->font->getPath(), $char);
+                    // 長さを取得する
+                    $charWidth = abs($box[2] - $box[0]);
+                    // 高さを取得する
+                    $charHeight = abs($box[7] - $box[1]);
+                    $maxCharHeight = max($maxCharHeight, $charHeight);
+                    // 幅を超えるかチェックする
+                    if ($writeWidth + $charWidth > imagesx($textCanvas)) {
+                        // 書き込む
+                        $actualHeight += ($maxCharHeight + ($this->font->getSize() / 2));
+                        $writeLineLog[] = $writeData;
+                        $textCanvas = $this->write($textCanvas, $writeData, $actualHeight);
+                        if ($firstLineHeight === 0) {
+                            $firstLineHeight = $maxCharHeight + ($this->font->getSize() / 2);
+                        }
+                        // クリア
+                        $writeWidth = 0;
+                        $writeData = [];
+                        $maxCharHeight = 0;
+                    }
+                    $writeWidth += ($charWidth + self::LETTER_SPACING);
+                    $writeData[] = new WriteData($char, $this->font->getPath(), $this->font->getSize(), $fontColor, $charWidth, $charHeight);
+                }
+                if ($writeWidth > 0) {
                     // 書き込む
                     $actualHeight += ($maxCharHeight + ($this->font->getSize() / 2));
+                    $writeLineLog[] = $writeData;
                     $textCanvas = $this->write($textCanvas, $writeData, $actualHeight);
                     if ($firstLineHeight === 0) {
                         $firstLineHeight = $maxCharHeight + ($this->font->getSize() / 2);
                     }
-                    // クリア
-                    $writeWidth = 0;
-                    $writeData = [];
-                    $maxCharHeight = 0;
                 }
-                $writeWidth += ($charWidth + self::LETTER_SPACING);
-                $writeData[] = new WriteData($char, $this->font->getPath(), $this->font->getSize(), $fontColor, $charWidth, $charHeight);
             }
-            if ($writeWidth > 0) {
-                // 書き込む
-                $actualHeight += ($maxCharHeight + ($this->font->getSize() / 2));
-                $textCanvas = $this->write($textCanvas, $writeData, $actualHeight);
-                if ($firstLineHeight === 0) {
-                    $firstLineHeight = $maxCharHeight + ($this->font->getSize() / 2);
+        } catch (Exception $e) {
+            // 高さ固定で引き伸ばしが発生した際に飛んでくる
+
+            // textCanvasの作り直し
+            imagedestroy($textCanvas);
+            $textCanvas = imagecreatetruecolor($this->calcTextAreaWidth(), $this->height);
+            $fontColor = imagecolorallocate($textCanvas, $this->font->getColorRed(), $this->font->getColorGreen(), $this->font->getColorBlue());
+            // 透過画像にテキストを描画する
+            $backgroundColor = imagecolorallocatealpha($textCanvas, 0, 0, 0, 127);
+            imagealphablending($textCanvas, true);
+            imagesavealpha($textCanvas, true);
+            imagefill($textCanvas, 0, 0, $backgroundColor);
+
+            // 最後の行を消す
+            array_pop($writeLineLog);
+            // 最後の文字を省略文字にする
+            $lastLine = array_pop($writeLineLog);
+            // 2文字以上あれば2文字消す(安全策)
+            if (count($lastLine) >= 2) {
+                array_pop($lastLine);
+            }
+            array_pop($lastLine);
+            $lastLine[] = $this->retrieveOmissionCharacter($fontColor);
+            $writeLineLog[] = $lastLine;
+
+            $maxCharHeights = [];
+            foreach ($writeLineLog as $index => $line) {
+                $maxCharHeight = 0;
+                foreach ($line as $char) {
+                    $maxCharHeight = max($maxCharHeight, $char->getHeight());
                 }
+                $maxCharHeights[$index] = $maxCharHeight;
+            }
+
+            $actualHeight = 0;
+            foreach ($writeLineLog as $index => $line) {
+                $actualHeight += ($maxCharHeights[$index] + ($this->font->getSize() / 2));
+                $textCanvas = $this->write($textCanvas, $line, $actualHeight);
             }
         }
 
@@ -200,6 +247,25 @@ class TextToPicture
     }
 
     /**
+     * 省略文字のデータを取得する
+     *
+     * @param int $fontColor
+     *
+     * @return WriteData
+     */
+    private function retrieveOmissionCharacter(int $fontColor): WriteData
+    {
+        // 描画範囲を求める
+        $box = imagettfbbox($this->font->getSize(), 0, $this->font->getPath(), self::OMISSION_CHAR);
+        // 長さを取得する
+        $charWidth = abs($box[2] - $box[0]);
+        // 高さを取得する
+        $charHeight = abs($box[7] - $box[1]);
+
+        return new WriteData(self::OMISSION_CHAR, $this->font->getPath(), $this->font->getSize(), $fontColor, $charWidth, $charHeight);
+    }
+
+    /**
      * テキストを書き込む
      * @param GdImage $textCanvas
      * @param WriteData[] $writeData
@@ -211,6 +277,10 @@ class TextToPicture
     {
         // 高さが不足するので引き伸ばす
         if (imagesy($textCanvas) < $y) {
+            if (isset($this->height)) {
+                // 高さ指定あるのに引き伸ばしが発生したら例外を投げる
+                throw new Exception("高さが固定されています");
+            }
             $newHeight = imagesy($textCanvas) * 2;
             $newCanvas = imagecreatetruecolor($this->calcTextAreaWidth(), $newHeight);
             $backgroundColor = imagecolorallocatealpha($newCanvas, 0, 0, 0, 127);

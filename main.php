@@ -5,7 +5,8 @@ require_once __DIR__ . "/Font.php";
 
 $font = new Font();
 
-$txt2pic = new TextToPicture($argv[1] ?? null, 1080, null, $font);
+// $txt2pic = new TextToPicture($argv[1] ?? null, 1080, null, $font);
+$txt2pic = new TextToPicture($argv[1] ?? null, 1200, 630, $font); // OGPサイズ
 $txt2pic->setPadding(20);
 $txt2pic->setHideContent(true);
 

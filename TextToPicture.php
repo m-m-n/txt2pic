@@ -12,8 +12,17 @@ class TextToPicture
     const DEFAULT_PADDING = 48;
     const DEFAULT_WIDTH = 1280;
 
+    const LETTER_SPACING = 3;
+
+    // ぼかし(モザイク)のピクセルサイズ
+    const PIXELATE_SIZE = 6;
+
     private string $text;
+    private bool $isHideContent;
     private Font $font;
+
+    private int $width;
+    private ?int $height;
 
     private int $paddingLeft;
     private int $paddingRight;
@@ -29,12 +38,14 @@ class TextToPicture
      * @param int $width
      * @param Font|null $font
      */
-    public function __construct(string $text, ?int $width = null, ?Font $font = null)
+    public function __construct(string $text, ?int $width = null, ?int $height = null, ?Font $font = null)
     {
         $this->text = $text;
+        $this->isHideContent = false;
         $this->font = ($font ?? new Font());
 
         $this->width = ($width ?? self::DEFAULT_WIDTH);
+        $this->height = $height;
 
         $this->paddingLeft = self::DEFAULT_PADDING;
         $this->paddingRight = self::DEFAULT_PADDING;
@@ -50,6 +61,26 @@ class TextToPicture
     public function setPadding(int $padding)
     {
         $this->setEachPadding($padding, $padding, $padding, $padding);
+    }
+
+    /**
+     * 内容を隠す
+     *
+     * @param bool $isHideContent
+     */
+    public function setHideContent(bool $isHideContent)
+    {
+        $this->isHideContent = $isHideContent;
+    }
+
+    /**
+     * 内容を隠すかどうか
+     *
+     * @return bool
+     */
+    public function isHideContent(): bool
+    {
+        return $this->isHideContent;
     }
 
     /**
@@ -96,6 +127,9 @@ class TextToPicture
         imagesavealpha($textCanvas, true);
         imagefill($textCanvas, 0, 0, $backgroundColor);
 
+        // 最初の行の高さ
+        $firstLineHeight = 0;
+
         // 1行ずつ処理していく
         foreach (explode("\n", trim($this->text)) as $line) {
             if (trim($line) === "") {
@@ -126,24 +160,39 @@ class TextToPicture
                     // 書き込む
                     $actualHeight += ($maxCharHeight + ($this->font->getSize() / 2));
                     $textCanvas = $this->write($textCanvas, $writeData, $actualHeight);
+                    if ($firstLineHeight === 0) {
+                        $firstLineHeight = $maxCharHeight + ($this->font->getSize() / 2);
+                    }
                     // クリア
                     $writeWidth = 0;
                     $writeData = [];
                     $maxCharHeight = 0;
                 }
-                $writeWidth += $charWidth;
+                $writeWidth += ($charWidth + self::LETTER_SPACING);
                 $writeData[] = new WriteData($char, $this->font->getPath(), $this->font->getSize(), $fontColor, $charWidth, $charHeight);
             }
             if ($writeWidth > 0) {
                 // 書き込む
                 $actualHeight += ($maxCharHeight + ($this->font->getSize() / 2));
                 $textCanvas = $this->write($textCanvas, $writeData, $actualHeight);
+                if ($firstLineHeight === 0) {
+                    $firstLineHeight = $maxCharHeight + ($this->font->getSize() / 2);
+                }
             }
         }
 
         $canvas = (new NinePatch(__DIR__ . "/9patch", $this->width, $actualHeight + $this->paddingTop + $this->paddingBottom))->get();
 
         imagecopy($canvas, $textCanvas, $this->paddingLeft, $this->paddingTop, 0, 0, imagesx($textCanvas), $actualHeight);
+
+        if ($this->isHideContent()) {
+            $pixelateCanvas = imagecreate($this->width - ($this->paddingLeft + $this->paddingRight), $actualHeight - $firstLineHeight);
+            imagecopy($pixelateCanvas, $canvas, 0, 0, $this->paddingLeft, $this->paddingTop + $firstLineHeight, imagesx($pixelateCanvas), imagesy($pixelateCanvas));
+            // 加工の処理
+            imagefilter($pixelateCanvas, IMG_FILTER_PIXELATE, self::PIXELATE_SIZE);
+            imagecopy($canvas, $pixelateCanvas, $this->paddingLeft, $this->paddingTop + $firstLineHeight, 0, 0, imagesx($pixelateCanvas), imagesy($pixelateCanvas));
+            imagedestroy($pixelateCanvas);
+        }
 
         $this->imgCache = $canvas;
 
@@ -171,6 +220,7 @@ class TextToPicture
 
             // 新しい画像に元の画像の内容をコピーする
             imagecopy($newCanvas, $textCanvas, 0, 0, 0, 0, $this->calcTextAreaWidth(), imagesy($textCanvas));
+            imagedestroy($textCanvas);
 
             $textCanvas = $newCanvas;
         }
@@ -178,8 +228,9 @@ class TextToPicture
         $x = 0;
         foreach ($writeData as $data) {
             imagettftext($textCanvas, $data->getFontSize(), 0, $x, $y - ($data->getFontSize() / 2), $data->getFontColor(), $data->getFontPath(), $data->getCharacter());
-            $x += $data->getWidth();
+            $x += ($data->getWidth() + self::LETTER_SPACING);
         }
+
         return $textCanvas;
     }
 
